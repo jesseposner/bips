@@ -1,0 +1,358 @@
+<pre>
+  BIP: ?
+  Title: FROST
+  Author: Jesse Posner <jesse.posner@gmail.com>
+  Status: Draft
+  License: BSD-3-Clause
+  Type: Informational
+  Created: 2022-10-05
+</pre>
+
+== Introduction ==
+
+=== Abstract ===
+
+=== Copyright ===
+
+This document is licensed under the 3-clause BSD license.
+
+=== Motivation ===
+
+=== Design ===
+
+== Overview ==
+
+=== Optionality of Features ===
+
+=== General Signing Flow ===
+
+=== Public Key Aggregation  ===
+
+=== Nonce Generation ===
+
+=== Identifying Disruptive Signers ===
+
+==== Further remarks ====
+
+=== Tweaking ===
+
+== Algorithms ==
+
+=== Notation ===
+
+The notation follows the [https://github.com/jonasnick/bips/blob/musig2/bip-musig2.mediawiki MuSig2 BIP], reproduced here:
+
+* Lowercase variables represent integers or byte arrays.
+** The constant ''p'' refers to the field size, ''0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F''.
+** The constant ''n'' refers to the curve order, ''0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141''.
+* Uppercase variables refer to points on the curve with equation ''y<sup>2</sup> = x<sup>3</sup> + 7'' over the integers modulo ''p''.
+** ''is_infinite(P)'' returns whether or not ''P'' is the point at infinity.
+** ''x(P)'' and ''y(P)'' are integers in the range ''0..p-1'' and refer to the X and Y coordinates of a point ''P'' (assuming it is not infinity).
+** The constant ''G'' refers to the base point, for which ''x(G) = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798'' and ''y(G) = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8''.
+** Addition of points refers to the usual [https://en.wikipedia.org/wiki/Elliptic_curve#The_group_law elliptic curve group operation].
+** [https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication Multiplication (⋅) of an integer and a point] refers to the repeated application of the group operation.
+* Functions and operations:
+** ''||'' refers to byte array concatenation.
+** The function ''x[i:j]'', where ''x'' is a byte array and ''i, j &ge; 0'', returns a ''(j - i)''-byte array with a copy of the ''i''-th byte (inclusive) to the ''j''-th byte (exclusive) of ''x''.
+** The function ''bytes(n, x)'', where ''x'' is an integer, returns the n-byte encoding of ''x'', most significant byte first.
+** The constant ''empty_bytestring'' refers to the empty byte array. It holds that ''len(empty_bytestring) = 0''.
+** The function ''xbytes(P)'', where ''P'' is a point for which ''not is_infinite(P)'', returns ''bytes(32, x(P))''.
+** The function ''len(x)'' where ''x'' is a byte array returns the length of the array.
+** The function ''has_even_y(P)'', where ''P'' is a point for which ''not is_infinite(P)'', returns ''y(P) mod 2 == 0''.
+** The function ''with_even_y(P)'', where ''P'' is a point, returns ''P'' if ''is_infinite(P)'' or ''has_even_y(P)''. Otherwise,  ''with_even_y(P)'' returns ''-P''.
+** The function ''cbytes(P)'', where ''P'' is a point for which ''not is_infinite(P)'', returns ''a || xbytes(P)'' where ''a'' is a byte that is ''2'' if ''has_even_y(P)'' and ''3'' otherwise.
+** The function ''cbytes_ext(P)'', where ''P'' is a point, returns ''bytes(33, 0)'' if ''is_infinite(P)''. Otherwise, it returns ''cbytes(P)''.
+** The function ''int(x)'', where ''x'' is a 32-byte array, returns the 256-bit unsigned integer whose most significant byte first encoding is ''x''.
+** The function ''lift_x(x)'', where ''x'' is an integer in range ''0..2<sup>256</sup>-1'', returns the point ''P'' for which ''x(P) = x''<ref>
+    Given a candidate X coordinate ''x'' in the range ''0..p-1'', there exist either exactly two or exactly zero valid Y coordinates. If no valid Y coordinate exists, then ''x'' is not a valid X coordinate either, i.e., no point ''P'' exists for which ''x(P) = x''. The valid Y coordinates for a given candidate ''x'' are the square roots of ''c = x<sup>3</sup> + 7 mod p'' and they can be computed as ''y = &plusmn;c<sup>(p+1)/4</sup> mod p'' (see [https://en.wikipedia.org/wiki/Quadratic_residue#Prime_or_prime_power_modulus Quadratic residue]) if they exist, which can be checked by squaring and comparing with ''c''.</ref> and ''has_even_y(P)'', or fails if ''x'' is greater than ''p-1'' or no such point exists. The function ''lift_x(x)'' is equivalent to the following pseudocode:
+*** Fail if ''x &gt; p-1''.
+*** Let ''c = x<sup>3</sup> + 7 mod p''.
+*** Let ''y' = c<sup>(p+1)/4</sup> mod p''.
+*** Fail if ''c &ne; y'<sup>2</sup> mod p''.
+*** Let ''y = y' '' if ''y' mod 2 = 0'', otherwise let ''y = p - y' ''.
+*** Return the unique point ''P'' such that ''x(P) = x'' and ''y(P) = y''.
+** The function ''cpoint(x)'', where ''x'' is a 33-byte array (compressed serialization), sets ''P = lift_x(int(x[1:33]))'' and fails if that fails. If ''x[0] = 2'' it returns ''P'' and if ''x[0] = 3'' it returns ''-P''. Otherwise, it fails.
+** The function ''cpoint_ext(x)'', where ''x'' is a 33-byte array (compressed serialization), returns the point at infinity if ''x = bytes(33, 0)''. Otherwise, it returns ''cpoint(x)'' and fails if that fails.
+** The function ''hash<sub>tag</sub>(x)'' where ''tag'' is a UTF-8 encoded tag name and ''x'' is a byte array returns the 32-byte hash ''SHA256(SHA256(tag) || SHA256(tag) || x)''.
+* Other:
+** Tuples are written by listing the elements within parentheses and separated by commas. For example, ''(2, 3, 1)'' is a tuple.
+
+=== Distributed Key Generation ===
+
+==== Tweak Context ====
+
+The Tweak Context is a data structure consisting of the following elements:
+* The point ''Q'' representing the aggregate and potentially tweaked public key: an elliptic curve point
+* The accumulated tweak ''tacc'': an integer with ''0 &le; tacc < n''
+* The value ''gacc'' : 1 or -1 mod n
+
+We write "Let ''(Q, gacc, tacc) = tweak_ctx''" to assign names to the elements of a Tweak Context.
+
+<div>
+Algorithm ''GetXonlyPubkey(tweak_ctx)'':
+* Let ''(Q, _, _) = tweak_ctx''
+* Return ''xbytes(Q)''
+</div>
+
+<div>
+Algorithm ''GetPlainPubkey(tweak_ctx)'':
+* Let ''(Q, _, _) = tweak_ctx''
+* Return ''cbytes(Q)''
+</div>
+
+==== Key Sorting ====
+
+==== Share Generation ====
+
+<div>
+Algorithm ''ShareGen(sk, pk, t, session_id, sub_idx)'':
+* Inputs:
+** The secret key ''sk'': a 32-byte array
+** The x-only public key ''pk'' of the share recipient: a 32-byte array
+** The minimum number ''t'' of shares required to reconstruct the secret key with ''0 < t < 2^32''
+** The session identifier ''session_id'' (see [[#share-generation-session-id|Session ID]]): a 32-byte array
+** The sub-index ''sub_idx'' of the share recipient with ''0 &le; sub_idx < 2^32'' (optional argument)
+* Let ''seed = int(hash<sub>FROST/ShareGen/seed</sub>(session_id || sk || bytes(t))) mod n''
+* Let ''share = 0''
+* If the optional argument ''sub_idx'' is not present:
+** Let ''sub_idx = 0''
+* Let ''idx = int(hash<sub>FROST/index</sub>(pk || sub_idx)) mod n''
+** Fail if ''idx = 0''
+* Let ''vss_commit<sub>1</sub> = cbytes(int(sk)⋅G)''
+* For ''i = t .. 2'':
+** Let ''coeff<sub>i</sub> = int(hash(seed || bytes(i)))''
+** Let ''vss_commit<sub>i</sub> = cbytes(coeff<sub>i</sub>⋅G)''
+** Let ''share = (share + coeff<sub>i</sub>)⋅idx mod n''
+* Let ''share = share + int(sk) mod n''
+* Let ''vss_commits = vss_commit<sub>1..t</sub>''
+* Return ''(bytes(32, share), vss_commits)''
+</div>
+
+==== Share Aggregation ====
+
+<div>
+Algorithm ''ShareAgg(share<sub>1..u</sub>, vss_commits<sub>1..u</sub>, t, pk)'':
+* Inputs:
+** The number ''u'' of shares with ''0 < u < 2^32''
+** The shares ''share<sub>1..u</sub>'': ''u'' 32-byte arrays
+** The VSS commitments ''vss_commits<sub>1..u</sub>'': ''u'' arrays of ''t'' 33-byte arrays
+** The minimum number ''t'' of shares required to sign for the aggregated public key ''Q'' with ''0 < t < 2^32''
+** The x-only public key ''pk'' of the aggregated share recipient: a 32-byte array
+* Let ''agg_share = 0''
+* For ''i = 1 .. u'':
+** Run ''VerifyShare(vss_commits<sub>i</sub>, share<sub>i</sub>, pk, t)'' and fail if it fails
+** Let ''agg_share = agg_share + int(share<sub>i</sub>)''
+* Let ''vss_hash = int(hash<sub>VSS list</sub>(vss_commits<sub>1,1</sub> || vss_commits<sub>1,2</sub> || vss_commits<sub>1,t</sub> || ... || vss_commits<sub>u,t</sub>)) mod n''
+* Let ''Q = vss_commits<sub>1,1</sub> + vss_commits<sub>2,1</sub> + ... + vss_commits<sub>u,1</sub>''
+* Let ''agg_share = n - agg_share'' if ''not has_even_y(Q)''
+* Return (xbytes(Q), bytes(32, agg_share), vss_hash)
+</div>
+
+<div>
+Algorithm ''VerifyShare(vss_commit, share, pk, t)'':
+* Let ''C = vss_commit<sub>1</sub>⋅pk<sup>0</sup> + vss_commit<sub>2</sub>⋅pk<sup>1</sup> + ... + vss_commit<sub>t</sub>⋅pk<sup>t-1</sup>''
+* Fail if ''share·G ≠ C''
+</div>
+
+==== Applying Tweaks ====
+
+<div>
+Algorithm ''InitTweak(aggpk)'':
+* Inputs:
+** The aggregate x-only public key ''aggpk'': a 32-byte array
+* Let ''Q = cpoint(aggpk)''
+* Return ''tweak_ctx' = (Q, 0, 0)''
+</div>
+
+<div>
+Algorithm ''ApplyTweak(tweak_ctx, tweak, is_xonly_t)'':
+* Inputs:
+** The ''tweak_ctx'': a [[#tweak-context|Tweak Context]] data structure
+** The ''tweak'': a 32-byte array
+** The tweak mode ''is_xonly_t'': a boolean
+* Let ''(Q, gacc, tacc) = tweak_ctx''
+* If ''is_xonly_t'' and ''not has_even_y(Q)'':
+** Let ''g = -1 mod n''
+* Else:
+** Let ''g = 1''
+* Let ''t = int(tweak)''; fail if ''t &ge; n''
+* Let ''Q' = g⋅Q + t⋅G''
+** Fail if ''is_infinite(Q')''
+* Let ''gacc' = g⋅gacc mod n''
+* Let ''tacc' = t + g⋅tacc mod n''
+* Return ''tweak_ctx' = (Q', gacc', tacc')''
+</div>
+
+=== Nonce Generation ===
+
+<div>
+Algorithm ''NonceGen(agg_share, aggpk, m, extra_in)'':
+* Inputs:
+** The aggregated share ''agg_share'': a 32-byte array (optional argument)
+** The aggregate x-only public key ''aggpk'': a 32-byte array (optional argument)
+** The message ''m'': a byte array (optional argument)
+** The auxiliary input ''extra_in'': a byte array with ''0 &le; len(extra_in) &le; 2<sup>32</sup>-1'' (optional argument)
+* Let ''rand' '' be a 32-byte array freshly drawn uniformly at random
+* If the optional argument ''agg_share'' is present:
+** Let ''rand'' be the byte-wise xor of ''agg_share'' and ''hash<sub>FROST/aux</sub>(rand')''
+* Else:
+** Let ''rand = rand' ''
+* If the optional argument ''aggpk'' is not present:
+** Let ''aggpk = empty_bytestring''
+* If the optional argument ''m'' is not present:
+** Let ''m_prefixed = bytes(1, 0)''
+* Else:
+** Let ''m_prefixed = bytes(1, 1) || bytes(8, len(m)) || m''
+* If the optional argument ''extra_in'' is not present:
+** Let ''extra_in = empty_bytestring''
+* Let ''k<sub>i</sub> = int(hash<sub>FROST/nonce</sub>(rand || bytes(1, len(aggpk)) || aggpk || m_prefixed || bytes(4, len(extra_in)) || extra_in || bytes(1, i - 1))) mod n'' for ''i = 1,2''
+* Fail if ''k<sub>1</sub> = 0'' or ''k<sub>2</sub> = 0''
+* Let ''R<sub>⁎,1</sub> = k<sub>1</sub>⋅G, R<sub>⁎,2</sub> = k<sub>2</sub>⋅G''
+* Let ''pubnonce = cbytes(R<sub>⁎,1</sub>) || cbytes(R<sub>⁎,2</sub>)''
+* Let ''secnonce = bytes(32, k<sub>1</sub>) || bytes(32, k<sub>2</sub>)''
+* Return ''(secnonce, pubnonce)''
+</div>
+
+=== Session Context ===
+
+The Session Context is a data structure consisting of the following elements:
+* The aggregate x-only public key ''aggpk'': a 32-byte array
+* The number ''u'' of public nonces and public keys with ''0 < u < 2^32''
+* The x-only public keys ''pk<sub>1..u</sub>'': ''u'' 32-byte arrays
+* The public nonces ''pubnonce<sub>1..u</sub>'': ''u'' 66-byte arrays
+* The number ''v'' of tweaks with ''0 &le; v < 2^32''
+* The tweaks ''tweak<sub>1..v</sub>'': ''v'' 32-byte arrays
+* The tweak modes ''is_xonly_t<sub>1..v</sub>'' : ''v'' booleans
+* The message ''m'': a byte array
+
+We write "Let ''(aggpk, u, pk<sub>1..u</sub>, pubnonce<sub>1..u</sub> v, tweak<sub>1..v</sub>, is_xonly_t<sub>1..v</sub>, m) = session_ctx''" to assign names to the elements of a Session Context.
+
+<div>
+Internal Algorithm ''NonceAgg(pubnonce<sub>1..u</sub>)'':
+* Inputs:
+** The number ''u'' of ''pubnonces'' with ''0 < u < 2^32''
+** The public nonces ''pubnonce<sub>1..u</sub>'': ''u'' 66-byte arrays
+* For ''j = 1 .. 2'':
+** For ''i = 1 .. u'':
+*** Let ''R<sub>i,j</sub> = cpoint(pubnonce<sub>i</sub>[(j-1)*33:j*33])''; fail if that fails and blame signer ''i'' for invalid ''pubnonce''.
+** Let ''R<sub>j</sub> = R<sub>1,j</sub> + R<sub>2,j</sub> + ... + R<sub>u,j</sub>''
+* Return ''aggnonce = cbytes_ext(R<sub>1</sub>) || cbytes_ext(R<sub>2</sub>)''
+</div>
+
+<div>
+Algorithm ''GetSessionValues(session_ctx)'':
+* Let ''(aggpk, u, pk<sub>1..u</sub>, pubnonce<sub>1..u</sub>, v, tweak<sub>1..v</sub>, is_xonly_t<sub>1..v</sub>, m) = session_ctx''
+* Let ''tweak_ctx<sub>0</sub> = InitTweak(aggpk)''
+* For ''i = 1 .. v'':
+** Let ''tweak_ctx<sub>i</sub> = ApplyTweak(tweak_ctx<sub>i-1</sub>, tweak<sub>i</sub>, is_xonly_t<sub>i</sub>)''; fail if that fails
+* Let ''(Q, gacc, tacc) = tweak_ctx<sub>v</sub>''
+* Let ''aggnonce = NonceAgg(pubnonce<sub>1..u</sub>)''
+* Let ''b = int(hash<sub>FROST/noncecoef</sub>(pk<sub>1</sub> || pubnonce<sub>1</sub> || ... || pk<sub>u</sub> || pubnonce<sub>u</sub> || xbytes(Q) || m)) mod n''
+* Let ''R<sub>1</sub> = cpoint_ext(aggnonce[0:33]), R<sub>2</sub> = cpoint_ext(aggnonce[33:66])''; fail if that fails and blame nonce aggregator for invalid ''aggnonce''.
+* Let ''R' = R<sub>1</sub> + b⋅R<sub>2</sub>''
+* If ''is_infinite(R'):
+** Let final nonce ''R = G'' (see [[#dealing-with-infinity-in-nonce-aggregation|Dealing with Infinity in Nonce Aggregation]])
+* Else:
+** Let final nonce ''R = R' ''
+* Let ''e = int(hash<sub>BIP0340/challenge</sub>(xbytes(R) || xbytes(Q) || m)) mod n''
+* Return ''(Q, gacc, tacc, b, R, e)''
+</div>
+
+<div>
+Algorithm ''GetLagrangeCoeff(session_ctx, i)'':
+* Let ''(_, u, pk<sub>1..u</sub>, _, _, _, _) = session_ctx''
+* Return ''LagrangeCoeff(pk<sub>1..u</sub>, i)''
+</div>
+
+=== Signing ===
+
+<div>
+Algorithm ''Sign(secnonce, sk, session_ctx)'':
+* Inputs:
+** The secret nonce ''secnonce'' that has never been used as input to ''Sign'' before: a 64-byte array
+** The secret key ''sk'': a 32-byte array
+** The ''session_ctx'': a [[#session-context|Session Context]] data structure
+** The index of the signer ''i'' in the public nonces and public keys with ''0 < i &le; u''
+* Let ''(Q, gacc, _, b, R, e) = GetSessionValues(session_ctx)''; fail if that fails
+* Let ''k<sub>1</sub>' = int(secnonce[0:32]), k<sub>2</sub>' = int(secnonce[32:64])''
+* Fail if ''k<sub>i</sub>' = 0'' or ''k<sub>i</sub>' &ge; n'' for ''i = 1..2''
+* Let ''k<sub>1</sub> = k<sub>1</sub>', k<sub>2</sub> = k<sub>2</sub>' '' if ''has_even_y(R)'', otherwise let ''k<sub>1</sub> = n - k<sub>1</sub>', k<sub>2</sub> = n - k<sub>2</sub>' ''
+* Let ''d' = int(sk)''
+* Fail if ''d' = 0'' or ''d' &ge; n''
+* Let ''P = d'⋅G''
+* Let ''pubshare = cbytes(P)''
+* Let ''a = GetSessionLagrangeCoeff(session_ctx, i)''; fail if that fails
+* Let ''g = 1'' if ''has_even_y(Q)'', otherwise let ''g = -1 mod n''
+* <div id="Sign negation"></div>Let ''d = g⋅gacc⋅d' mod n'' (See [[negation-of-the-secret-key-when-signing|Negation Of The Secret Key When Signing]])
+* Let ''s = (k<sub>1</sub> + b⋅k<sub>2</sub> + e⋅a⋅d) mod n''
+* Let ''psig = bytes(32, s)''
+* Let ''pubnonce = cbytes(k<sub>1</sub>'⋅G) || cbytes(k<sub>2</sub>'⋅G)''
+* If ''PartialSigVerifyInternal(psig, pubnonce, cbytes(P), session_ctx, pubshare)'' (see below) returns failure, abort. This can be omitted if the computation cost is prohibitive.
+* Return partial signature ''psig''
+</div>
+
+=== Partial Signature Verification ===
+
+<div>
+Algorithm ''PartialSigVerify(aggpk, psig, pubnonce<sub>1..u</sub>, pk<sub>1..u</sub>, tweak<sub>1..v</sub>, is_xonly_t<sub>1..v</sub>, m, i, pubshare)'':
+* Inputs:
+** The aggregate x-only public key ''aggpk'': a 32-byte array
+** The partial signature ''psig'': a 32-byte array
+** The number ''u'' of public nonces and public keys with ''0 < u < 2^32''
+** The public nonces ''pubnonce<sub>1..u</sub>'': ''u'' 66-byte arrays
+** The plain public keys ''pk<sub>1..u</sub>'': ''u'' 33-byte arrays
+** The number ''v'' of tweaks with ''0 &le; v < 2^32''
+** The tweaks ''tweak<sub>1..v</sub>'': ''v'' 32-byte arrays
+** The tweak modes ''is_xonly_t<sub>1..v</sub>'' : ''v'' booleans
+** The message ''m'': a byte array
+** The index of the signer ''i'' in the public nonces and public keys with ''0 < i &le; u''
+** The public share of the signer ''pubshare'': a 33-byte array
+* Let ''session_ctx = (aggpk, u, pk<sub>1..u</sub>, pubnonce<sub>1..u</sub>, v, tweak<sub>1..v</sub>, is_xonly_t<sub>1..v</sub>, m)''
+* Run ''PartialSigVerifyInternal(psig, pubnonce<sub>i</sub>, pk<sub>i</sub>, session_ctx, pubshare, i)''
+* Return success iff no failure occurred before reaching this point.
+</div>
+
+<div>
+Internal Algorithm ''PartialSigVerifyInternal(psig, pubnonce, pubshare, session_ctx, i)'':
+* Let ''(Q, gacc, _, b, R, e) = GetSessionValues(session_ctx)''; fail if that fails
+* Let ''s = int(psig)''; fail if ''s &ge; n''
+* Let ''R<sub>⁎,1</sub> = cpoint(pubnonce[0:33]), R<sub>⁎,2</sub> = cpoint(pubnonce[33:66])''
+* Let ''Re<sub>⁎</sub>' = R<sub>⁎,1</sub> + b⋅R<sub>⁎,2</sub>''
+* Let effective nonce ''Re<sub>⁎</sub> = Re<sub>⁎</sub>' '' if ''has_even_y(R)'', otherwise let ''Re<sub>⁎</sub> = -Re<sub>⁎</sub>' ''
+* Let ''P = cpoint(pubshare)''; fail if that fails
+* Let ''a = GetSessionLagrangeCoeff(session_ctx, i)''; fail if that fails
+* Let ''g = 1'' if ''has_even_y(Q)'', otherwise let ''g = -1 mod n''
+* <div id="SigVerify negation"></div>Let ''g' = g⋅gacc mod n'' (See [[#negation-of-the-public-key-when-partially-verifying|Negation Of The Public Key When Partially Verifying]])
+* Fail if ''s⋅G &ne; Re<sub>⁎</sub> + e⋅a⋅g'⋅P''
+* Return success iff no failure occurred before reaching this point.
+</div>
+
+=== Partial Signature Aggregation ===
+
+<div>
+Algorithm ''PartialSigAgg(psig<sub>1..u</sub>, session_ctx)'':
+* Inputs:
+** The number ''u'' of signatures with ''0 < u < 2^32''
+** The partial signatures ''psig<sub>1..u</sub>'': ''u'' 32-byte arrays
+** The ''session_ctx'': a [[#session-context|Session Context]] data structure
+* Let ''(Q, _, tacc, _, _, R, e) = GetSessionValues(session_ctx)''; fail if that fails
+* For ''i = 1 .. u'':
+** Let ''s<sub>i</sub> = int(psig<sub>i</sub>)''; fail if ''s<sub>i</sub> &ge; n'' and blame signer ''i'' for invalid partial signature.
+* Let ''g = 1'' if ''has_even_y(Q)'', otherwise let ''g = -1 mod n''
+* Let ''s = s<sub>1</sub> + ... + s<sub>u</sub> + e⋅g⋅tacc mod n''
+* Return ''sig = ''xbytes(R) || bytes(32, s)''
+</div>
+
+== Remarks on Security and Correctness ==
+
+=== Share Generation Session ID ===
+
+== Change Log ==
+
+* '''0.1.0''' (2022-XX-XX): Publication of draft BIP on the bitcoin-dev mailing list
+
+== Footnotes ==
+
+<references />
+
+== Acknowledgements ==
