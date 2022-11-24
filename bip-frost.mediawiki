@@ -270,9 +270,22 @@ Algorithm ''GetSessionValues(session_ctx)'':
 </div>
 
 <div>
-Algorithm ''GetLagrangeCoeff(session_ctx, i)'':
-* Let ''(_, u, pk<sub>1..u</sub>, _, _, _, _) = session_ctx''
-* Return ''LagrangeCoeff(pk<sub>1..u</sub>, i)''
+Algorithm ''GetSessionLagrangeCoeff(session_ctx, i)'':
+* Let ''(_, u, pk<sub>1..u</sub>, sub_idx<sub>1..u</sub>, _, _, _, _, _) = session_ctx''
+* Return ''LagrangeCoeff(pk<sub>1..u</sub>, sub_idx<sub>1..u</sub>, i)''
+</div>
+
+<div>
+Internal Algorithm ''LagrangeCoeff(pk<sub>1..u</sub>, sub_idx<sub>1..u</sub>, i)'':
+* Let ''num = 1''
+* Let ''den = 1''
+* For ''j = 1 .. u'':
+** If ''j != i'':
+** Let ''Let idx<sub>j</sub> = IndexHash(pk<sub>j</sub>, sub_idx<sub>j</sub>)''; fail if that fails
+** Let ''Let idx<sub>i</sub> = IndexHash(pk<sub>i</sub>, sub_idx<sub>i</sub>)''; fail if that fails
+** Let ''num = num⋅idx<sub>j</sub>''
+** Let ''den = den⋅(idx<sub>j</sub> - idx<sub>i</sub>)''
+* Return ''num⋅den<sup>-1</sup> mod n''
 </div>
 
 === Signing ===
