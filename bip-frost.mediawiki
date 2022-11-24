@@ -142,7 +142,7 @@ Algorithm ''ShareAgg(share<sub>1..u</sub>, vss_commits<sub>1..u</sub>, t, pk)'':
 ** The number ''u'' of shares with ''0 < u < 2^32''
 ** The shares ''share<sub>1..u</sub>'': ''u'' 32-byte arrays
 ** The VSS commitments ''vss_commits<sub>1..u</sub>'': ''u'' arrays of ''t'' 33-byte arrays
-** The minimum number ''t'' of shares required to sign for the aggregated public key ''Q'' with ''0 < t < 2^32''
+** The minimum number ''t'' of shares required to reconstruct the secret key with ''0 < t < 2^32''
 ** The x-only public key ''pk'' of the aggregated share recipient: a 32-byte array
 * Let ''agg_share = 0''
 * For ''i = 1 .. u'':
@@ -156,6 +156,12 @@ Algorithm ''ShareAgg(share<sub>1..u</sub>, vss_commits<sub>1..u</sub>, t, pk)'':
 
 <div>
 Algorithm ''VerifyShare(vss_commit, share, pk, t, sub_idx)'':
+* Inputs:
+** The VSS commitment ''vss_commit'': an array of ''t'' 33-byte arrays
+** The share ''share'': a 32-byte array
+** The x-only public key ''pk'' of the share recipient: a 32-byte array
+** The minimum number ''t'' of shares required to reconstruct the secret key with ''0 < t < 2^32''
+** The sub-index ''sub_idx'' of the share recipient with ''0 &le; sub_idx < 2^32'' (optional argument)
 * Let ''sub_idx = 0''
 ** If the optional argument ''sub_idx'' is not present:
 ** Let ''sub_idx = 0''
@@ -240,9 +246,6 @@ We write "Let ''(aggpk, u, pk<sub>1..u</sub>, sub_idx<sub>1..u</sub>, pubnonce<s
 
 <div>
 Internal Algorithm ''NonceAgg(pubnonce<sub>1..u</sub>)'':
-* Inputs:
-** The number ''u'' of ''pubnonces'' with ''0 < u < 2^32''
-** The public nonces ''pubnonce<sub>1..u</sub>'': ''u'' 66-byte arrays
 * For ''j = 1 .. 2'':
 ** For ''i = 1 .. u'':
 *** Let ''R<sub>i,j</sub> = cpoint(pubnonce<sub>i</sub>[(j-1)*33:j*33])''; fail if that fails and blame signer ''i'' for invalid ''pubnonce''.
