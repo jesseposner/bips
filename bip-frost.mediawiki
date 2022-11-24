@@ -116,8 +116,7 @@ Algorithm ''ShareGen(sk, pk, t, session_id, sub_idx)'':
 * Let ''share = 0''
 * If the optional argument ''sub_idx'' is not present:
 ** Let ''sub_idx = 0''
-* Let ''idx = int(hash<sub>FROST/index</sub>(pk || sub_idx)) mod n''
-** Fail if ''idx = 0''
+* Let ''idx = IndexHash(pk, sub_idx)''; fail if that fails
 * Let ''vss_commit<sub>1</sub> = cbytes(int(sk)⋅G)''
 * For ''i = t .. 2'':
 ** Let ''coeff<sub>i</sub> = int(hash(seed || bytes(i)))''
@@ -126,6 +125,13 @@ Algorithm ''ShareGen(sk, pk, t, session_id, sub_idx)'':
 * Let ''share = share + int(sk) mod n''
 * Let ''vss_commits = vss_commit<sub>1..t</sub>''
 * Return ''(bytes(32, share), vss_commits)''
+</div>
+
+<div>
+Internal Algorithm ''IndexHash(pk, sub_idx)'':
+* Let ''idx = int(hash<sub>FROST/index</sub>(pk || sub_idx)) mod n''
+* Fail if ''idx = 0''
+* Return ''idx''
 </div>
 
 ==== Share Aggregation ====
@@ -149,8 +155,12 @@ Algorithm ''ShareAgg(share<sub>1..u</sub>, vss_commits<sub>1..u</sub>, t, pk)'':
 </div>
 
 <div>
-Algorithm ''VerifyShare(vss_commit, share, pk, t)'':
-* Let ''C = vss_commit<sub>1</sub>⋅pk<sup>0</sup> + vss_commit<sub>2</sub>⋅pk<sup>1</sup> + ... + vss_commit<sub>t</sub>⋅pk<sup>t-1</sup>''
+Algorithm ''VerifyShare(vss_commit, share, pk, t, sub_idx)'':
+* Let ''sub_idx = 0''
+** If the optional argument ''sub_idx'' is not present:
+** Let ''sub_idx = 0''
+* Let ''Let index = IndexHash(pk, sub_idx)''; fail if that fails
+* Let ''C = vss_commit<sub>1</sub>⋅idx<sup>0</sup> + vss_commit<sub>2</sub>⋅idx<sup>1</sup> + ... + vss_commit<sub>t</sub>⋅idx<sup>t-1</sup>''
 * Fail if ''share·G ≠ C''
 </div>
 
